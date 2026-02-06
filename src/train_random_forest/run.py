@@ -19,7 +19,7 @@ from sklearn.impute import SimpleImputer
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import OrdinalEncoder, FunctionTransformer, OneHotEncoder
 
-import wandb
+import wandb 
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error
 from sklearn.pipeline import Pipeline, make_pipeline
@@ -40,12 +40,24 @@ logger = logging.getLogger()
 
 def go(args):
 
-    run = wandb.init(job_type="train_random_forest")
-    run.config.update(args)
+    run = wandb.init(
+    project="nyc_airbnb",
+    entity="c-ladebu32-western-governors-university",
+    job_type="train_random_forest",
+    )
+
+    run.config.update(vars(args))
 
     # Get the Random Forest configuration and update W&B
     with open(args.rf_config) as fp:
         rf_config = json.load(fp)
+
+    # Ensure consistent types for W&B table columns
+    if rf_config.get("max_depth") is not None:
+        rf_config["max_depth"] = int(rf_config["max_depth"])
+    if "n_estimators" in rf_config:
+        rf_config["n_estimators"] = int(rf_config["n_estimators"])
+
     run.config.update(rf_config)
 
     # Fix the random seed for the Random Forest, so we get reproducible results
@@ -60,8 +72,13 @@ def go(args):
 
     logger.info(f"Minimum price: {y.min()}, Maximum price: {y.max()}")
 
+    stratify = None if args.stratify_by == "none" else X[args.stratify_by]
+
     X_train, X_val, y_train, y_val = train_test_split(
-        X, y, test_size=args.val_size, stratify=X[args.stratify_by], random_state=args.random_seed
+        X, y,
+        test_size=args.val_size,
+        stratify=stratify,
+        random_state=args.random_seed
     )
 
     logger.info("Preparing sklearn pipeline")
@@ -73,7 +90,8 @@ def go(args):
 
     ######################################
     # Fit the pipeline sk_pipe by calling the .fit method on X_train and y_train
-    # YOUR CODE HERE
+    sk_pipe.fit(X_train, y_train)
+
     ######################################
 
     # Compute r2 and MAE
@@ -83,10 +101,10 @@ def go(args):
     y_pred = sk_pipe.predict(X_val)
     mae = mean_absolute_error(y_val, y_pred)
 
-    logger.info(f"Score: {r_squared}")
-    logger.info(f"MAE: {mae}")
+    run.log({"r2": r_squared, "mae": mae})
 
-    logger.info("Exporting model")
+    run.summary["r2"] = r_squared
+    run.summary["mae"] = mae
 
     # Save model package in the MLFlow sklearn format
     if os.path.exists("random_forest_dir"):
@@ -96,7 +114,8 @@ def go(args):
     # Save the sk_pipe pipeline as a mlflow.sklearn model in the directory "random_forest_dir"
     # HINT: use mlflow.sklearn.save_model
     mlflow.sklearn.save_model(
-        # YOUR CODE HERE
+        sk_pipe,
+        "random_forest_dir",
         input_example = X_train.iloc[:5]
     )
     ######################################
@@ -119,15 +138,13 @@ def go(args):
     # Here we save variable r_squared under the "r2" key
     run.summary['r2'] = r_squared
     # Now save the variable mae under the key "mae".
-    # YOUR CODE HERE
+    run.summary['mae'] = mae
     ######################################
 
     # Upload to W&B the feture importance visualization
-    run.log(
-        {
-          "feature_importance": wandb.Image(fig_feat_imp),
-        }
-    )
+    run.log({"feature_importance": wandb.Image(fig_feat_imp)})
+    run.finish()
+    
 
 
 def plot_feature_importance(pipe, feat_names):
@@ -162,7 +179,8 @@ def get_inference_pipeline(rf_config, max_tfidf_features):
     # 1 - A SimpleImputer(strategy="most_frequent") to impute missing values
     # 2 - A OneHotEncoder() step to encode the variable
     non_ordinal_categorical_preproc = make_pipeline(
-        # YOUR CODE HERE
+        SimpleImputer(strategy="most_frequent"),
+        OneHotEncoder(handle_unknown="ignore")
     )
     ######################################
 
@@ -224,8 +242,9 @@ def get_inference_pipeline(rf_config, max_tfidf_features):
     # HINT: Use the explicit Pipeline constructor so you can assign the names to the steps, do not use make_pipeline
 
     sk_pipe = Pipeline(
-        steps =[
-        # YOUR CODE HERE
+        steps=[
+        ("preprocessor", preprocessor),
+        ("random_forest", random_forest),
         ]
     )
 
